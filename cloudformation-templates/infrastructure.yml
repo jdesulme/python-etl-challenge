@@ -2,13 +2,226 @@ AWSTemplateFormatVersion: "2010-09-09"
 
 Description: Setup CFT base for GitHub Actions Execution
 
+Parameters:
+  DBPassword:
+    NoEcho: 'true'
+    Description: PostgreSQL password database access
+    Type: String
+    MinLength: '8'
+    MaxLength: '41'
+    AllowedPattern: '[a-zA-Z0-9]*'
+    ConstraintDescription: must contain only alphanumeric characters.
+
 Resources:
-  WebServerSecurityGroup:
+  # Networking Configuration
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 172.31.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: VPC
+  PrivateDBSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref 'VPC'
+      CidrBlock: 172.31.0.0/20
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs
+          Ref: AWS::Region
+      Tags:
+        - Key: Name
+          Value: PrivateDBSubnet1
+  PrivateDBSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref 'VPC'
+      CidrBlock: 172.31.16.0/20
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs
+          Ref: AWS::Region
+      Tags:
+        - Key: Name
+          Value: PrivateDBSubnet2
+  PrivateLambdaSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref 'VPC'
+      CidrBlock: 172.31.32.0/20
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs
+          Ref: AWS::Region
+      Tags:
+        - Key: Name
+          Value: PrivateLambdaSubnet1
+  PrivateLambdaSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref 'VPC'
+      CidrBlock: 172.31.48.0/20
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs
+          Ref: AWS::Region
+      Tags:
+        - Key: Name
+          Value: PrivateLambdaSubnet2
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref 'VPC'
+      CidrBlock: 172.31.64.0/20
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs
+          Ref: AWS::Region
+      Tags:
+        - Key: Name
+          Value: PublicSubnet1
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref 'VPC'
+      CidrBlock: 172.31.80.0/20
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs
+          Ref: AWS::Region
+      Tags:
+        - Key: Name
+          Value: PublicSubnet2
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: InternetGateway
+  AttachInternetGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref 'VPC'
+      InternetGatewayId: !Ref 'InternetGateway'
+  CustomRouteTable:
+    DependsOn: AttachInternetGateway
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref 'VPC'
+      Tags:
+        - Key: Name
+          Value: CustomRouteTable
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref 'VPC'
+      Tags:
+        - Key: Name
+          Value: RouteTable
+  SubnetRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref 'PrivateDBSubnet1'
+      RouteTableId: !Ref 'RouteTable'
+  SubnetRouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref 'PrivateDBSubnet2'
+      RouteTableId: !Ref 'RouteTable'
+  SubnetRouteTableAssociation3:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref 'PrivateLambdaSubnet1'
+      RouteTableId: !Ref 'RouteTable'
+  SubnetRouteTableAssociation4:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref 'PrivateLambdaSubnet2'
+      RouteTableId: !Ref 'RouteTable'
+  SubnetRouteTableAssociation5:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref 'PublicSubnet1'
+      RouteTableId: !Ref 'CustomRouteTable'
+  SubnetRouteTableAssociation6:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref 'PublicSubnet2'
+      RouteTableId: !Ref 'CustomRouteTable'
+  NAT:
+    DependsOn: VPC
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt 'EIP.AllocationId'
+      SubnetId: !Ref 'PublicSubnet1'
+  EIP:
+    DependsOn: AttachInternetGateway
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+  RouteToNAT:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref 'RouteTable'
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref 'NAT'
+  RouteToInternet:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref 'CustomRouteTable'
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref 'InternetGateway'
+  LambdaSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: "Enable HTTP access via port 80 locked down to the load balancer + SSH access"
+      GroupDescription: Security group for Lambda ENIs
+      VpcId: !Ref 'VPC'
+      Tags:
+        - Key: Name
+          Value: LambdaSecurityGroup
+
+  # Database Configuration
+  DBInstance:
+    Type: 'AWS::RDS::DBInstance'
+    Properties:
+      AllocatedStorage: '5'
+      BackupRetentionPeriod: 0
+      DBInstanceClass: db.t3.micro
+      DBSubnetGroupName: !Ref 'DBSubnetGroup'
+      EnableIAMDatabaseAuthentication: true
+      Engine: postgres
+      MasterUsername: admin
+      MasterUserPassword: !Ref DBPassword
+      MultiAZ: false
+      PubliclyAccessible: false
+      StorageType: gp2
+      VPCSecurityGroups:
+        - !Ref 'RDSSecurityGroup'
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: description
+      SubnetIds:
+        - !Ref 'PrivateDBSubnet1'
+        - !Ref 'PrivateDBSubnet2'
+      Tags:
+        - Key: Name
+          Value: myDBSubnetGroup
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow PostgreSQl access from lambda subnets
+      VpcId: !Ref 'VPC'
       SecurityGroupIngress:
-      - CidrIp: 0.0.0.0/0
-        FromPort: 80
-        IpProtocol: tcp
-        ToPort: 80
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref 'LambdaSecurityGroup'
+
+Outputs:
+  InstanceId:
+    Description: InstanceId of the newly created RDS Instance
+    Value: !Ref DBInstance
